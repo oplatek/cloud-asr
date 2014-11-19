@@ -26,7 +26,7 @@ MASTER_OPTS=--name master \
 WORKER_VOLUMES=-v ${CURDIR}/cloudasr/worker:/opt/app -v ${SHARED_VOLUME}
 WORKER_OPTS=--name worker \
 	-p ${WORKER_PORT}:${WORKER_PORT} \
-	-e HOSTNAME=${IP} \
+	-e HOST=${IP} \
 	-e PORT0=${WORKER_PORT} \
 	-e MASTER_ADDR=${MASTER_TO_WORKER_ADDR} \
 	-e MODEL=en-GB \
@@ -79,7 +79,7 @@ run:
 	docker run ${MONITOR_OPTS} -d ufaldsg/cloud-asr-monitor
 
 run_on_local_mesos: push_images_to_local_registry
-	python run_on_mesos.py http://localhost:8080 cloudasr.dev ${MESOS_SLAVE_IP} registry:5000
+	python ${CURDIR}/deployment/run_on_mesos.py http://localhost:8080 cloudasr.dev ${MESOS_SLAVE_IP} registry:5000
 
 push_images_to_local_registry: build_local
 	docker tag ufaldsg/cloud-asr-monitor localhost:5000/ufaldsg/cloud-asr-monitor
