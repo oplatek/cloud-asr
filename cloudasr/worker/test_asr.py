@@ -53,10 +53,13 @@ class DummyRecogniser:
         self.frames = max(self.frames - max_frames, 0)
         return self.frames
 
-    def prune_final(self):
+    def finalize_decoding(self):
         pass
 
     def get_lattice(self):
+        return (None, None)
+
+    def get_best_path(self):
         return (None, None)
 
     def reset(self):
@@ -66,3 +69,6 @@ class DummyLattice:
 
     def to_nbest(self, lattice, n):
         return [(1.0, u"Hello World!")]
+
+    def to_best_path(self, path):
+        return (0.0, u"Interim Result")
