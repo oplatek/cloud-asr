@@ -13,7 +13,7 @@ class TestFrontendWorker(unittest.TestCase):
         "wav": b"some wav"
     }
     request_headers = {
-        "Content-Type": "audio/x-wav; rate=44100;"
+        "Content-Type": "audio/x-wav; rate=16000;"
     }
 
     def setUp(self):
@@ -49,16 +49,17 @@ class TestFrontendWorker(unittest.TestCase):
 
     def test_recognize_batch_sends_data_to_worker(self):
         self.worker.recognize_batch(self.request_data, self.request_headers)
-        expected_message = createRecognitionRequestMessage("BATCH", b"some wav", False)
+        expected_message = createRecognitionRequestMessage("BATCH", b"some wav", False, frame_rate=16000)
         self.assertThatMessagesWasSendToWorker([expected_message])
 
     def test_recognize_batch_sends_data_with_unique_id_to_worker(self):
         self.id_generator.set_id([1])
         self.worker.recognize_batch(self.request_data, self.request_headers)
-        expected_message = createRecognitionRequestMessage("BATCH", b"some wav", False, id = 1)
+        expected_message = createRecognitionRequestMessage("BATCH", b"some wav", False, id = 1, frame_rate=16000)
         self.assertThatMessagesWasSendToWorker([expected_message])
 
     def test_recognize_batch_reads_response_from_worker(self):
+        self.id_generator.set_id([1])
         expected_response = {
             "result": [
                 {
@@ -72,6 +73,7 @@ class TestFrontendWorker(unittest.TestCase):
                 },
             ],
             "result_index": 0,
+            "request_id": '1'
         }
         received_response = self.worker.recognize_batch(self.request_data, self.request_headers)
 
@@ -113,6 +115,7 @@ class TestFrontendWorker(unittest.TestCase):
         self.assertThatMessagesWasSendToWorker([expected_message, expected_message])
 
     def test_recognize_chunk_reads_response_from_worker(self):
+        self.id_generator.set_id([1])
         self.worker.connect_to_worker("en-GB")
         received_response = self.worker.recognize_chunk(b"some binary chunk encoded in base64", frame_rate = 44100)
 
@@ -120,10 +123,14 @@ class TestFrontendWorker(unittest.TestCase):
             'status': 0,
             'result': {
                 'hypotheses': [
-                    {'transcript': 'Hello World!'}
+                    {
+                        'transcript': 'Hello World!',
+                        'confidence': 1.0
+                    }
                 ]
             },
-            'final': False
+            'final': False,
+            'request_id': '1'
         }
 
         self.assertEquals(expected_response, received_response)
@@ -143,6 +150,7 @@ class TestFrontendWorker(unittest.TestCase):
         self.assertThatMessagesWasSendToWorker([expected_message])
 
     def test_end_recognition_reads_response_from_worker(self):
+        self.id_generator.set_id([1])
         self.worker.connect_to_worker("en-GB")
         received_response = self.worker.end_recognition()
 
@@ -159,6 +167,7 @@ class TestFrontendWorker(unittest.TestCase):
                 },
             ],
             "result_index": 0,
+            "request_id": '1'
         }
 
         self.assertEquals(expected_response, received_response)

@@ -2,13 +2,13 @@ import sys
 import json
 import requests
 
-def master_spec(domain, slave_ip, registry):
+def master_spec(domain, master_ip, registry):
     return {
         "id": "master",
         "container": {
             "type": "DOCKER",
             "docker": {
-                "image": "%s/ufaldsg/cloud-asr-master" % registry,
+                "image": "%sufaldsg/cloud-asr-master:latest" % registry,
                 "network": "BRIDGE",
                 "portMappings": [
                     {"containerPort": 5679, "hostPort": 31000},
@@ -22,19 +22,20 @@ def master_spec(domain, slave_ip, registry):
         "env": {
             "WORKER_ADDR": "tcp://0.0.0.0:5679",
             "FRONTEND_ADDR": "tcp://0.0.0.0:5680",
-            "MONITOR_ADDR": "tcp://%s:31002" % slave_ip
+            "MONITOR_ADDR": "tcp://%s:31002" % master_ip
         },
         "uris": [],
-        "dependencies": ["/%s/monitor" % domain]
+        "dependencies": ["/%s/monitor" % domain],
+        "constraints": [["hostname", "LIKE", master_ip]]
     }
 
-def monitor_spec(domain, slave_ip, registry):
+def monitor_spec(domain, master_ip, registry):
     return {
         "id": "monitor",
         "container": {
             "type": "DOCKER",
             "docker": {
-                "image": "%s/ufaldsg/cloud-asr-monitor" % registry,
+                "image": "%sufaldsg/cloud-asr-monitor:latest" % registry,
                 "network": "BRIDGE",
                 "portMappings": [
                     {"containerPort": 80, "hostPort": 31003},
@@ -48,16 +49,41 @@ def monitor_spec(domain, slave_ip, registry):
         "env": {
             "MONITOR_ADDR": "tcp://0.0.0.0:5681"
         },
-        "uris": []
+        "uris": [],
+        "constraints": [["hostname", "LIKE", master_ip]]
     }
 
-def frontend_spec(domain, slave_ip, registry):
+def annotation_interface_spec(domain, master_ip, registry):
     return {
-        "id": "frontend",
+        "id": "annotation",
         "container": {
             "type": "DOCKER",
             "docker": {
-                "image": "%s/ufaldsg/cloud-asr-frontend" % registry,
+                "image": "%sufaldsg/cloud-asr-annotation-interface:latest" % registry,
+                "network": "BRIDGE",
+                "portMappings": [
+                    {"containerPort": 80, "hostPort": 31004},
+                    {"containerPort": 5682, "hostPort": 31005}
+                ]
+            },
+            "volumes": [
+                {"containerPath": "/tmp/data", "hostPath": "/tmp/data", "mode": "RW"}
+            ]
+        },
+        "instances": "1",
+        "cpus": "0.25",
+        "mem": "256",
+        "uris": [],
+        "constraints": [["hostname", "LIKE", master_ip]]
+    }
+
+def frontend_spec(domain, master_ip, registry):
+    return {
+        "id": "demo",
+        "container": {
+            "type": "DOCKER",
+            "docker": {
+                "image": "%sufaldsg/cloud-asr-frontend:latest" % registry,
                 "network": "BRIDGE",
                 "portMappings": [
                     {"containerPort": 80, "hostPort": 0}
@@ -68,51 +94,69 @@ def frontend_spec(domain, slave_ip, registry):
         "cpus": "0.25",
         "mem": "256",
         "env": {
-            "MASTER_ADDR": "tcp://%s:31001" % slave_ip
+            "MASTER_ADDR": "tcp://%s:31001" % master_ip,
         },
         "uris": [],
         "dependencies": ["/%s/master" % domain]
     }
 
-def worker_spec(domain, slave_ip, registry):
+def worker_spec(domain, master_ip, image, model, instances):
     return {
-        "id": "worker",
+        "id": imageToWorkerName(image),
         "container": {
             "type": "DOCKER",
             "docker": {
-                "image": "%s/ufaldsg/cloud-asr-worker" % registry,
+                "image": image,
                 "network": "BRIDGE",
                 "portMappings": [
                     {"containerPort": 5678, "hostPort": 0}
                 ]
             }
         },
-        "instances": "2",
+        "instances": instances,
         "cpus": "0.25",
         "mem": "256",
         "env": {
-            "MASTER_ADDR": "tcp://%s:31000" % slave_ip,
-            "MODEL": "en-GB"
+            "MASTER_ADDR": "tcp://%s:31000" % master_ip,
+            "RECORDINGS_SAVER_ADDR": "tcp://%s:31005" % master_ip,
+            "MODEL": model
         },
         "uris": [],
-        "dependencies": ["/%s/master" % domain]
+        "dependencies": [
+            "/%s/master" % domain,
+            "/%s/annotation" % domain
+        ]
     }
 
-def app_spec(domain, slave_ip, registry):
+def imageToWorkerName(image):
+    import re
+    m = re.search('ufaldsg\/cloud-asr-worker-(.*)', image)
+    return "worker" + m.group(1).replace('-', '')
+
+def app_spec(config):
+    domain = config["domain"]
+    master_ip = config["master_ip"]
+    registry = config.get("registry", "")
+
     return {
         "id": domain,
-        "apps": [master_spec(domain, slave_ip, registry), monitor_spec(domain, slave_ip, registry), frontend_spec(domain, slave_ip, registry), worker_spec(domain, slave_ip, registry)]
+        "apps": [
+            master_spec(domain, master_ip, registry),
+            monitor_spec(domain, master_ip, registry),
+            annotation_interface_spec(domain, master_ip, registry),
+            frontend_spec(domain, master_ip, registry),
+        ] + [
+            worker_spec(domain, master_ip, registry + worker["image"], worker["model"], worker["instances"]) for worker in config["workers"]
+        ]
     }
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        print "Usage python run_on_mesos.py marathon_url domain slave_ip registry_url"
+    if len(sys.argv) != 2:
+        print "Usage python run_on_mesos.py mesos.json"
         sys.exit(1)
 
-    marathon_url = sys.argv[1] + "/v2/groups"
-    domain = sys.argv[2]
-    slave_ip = sys.argv[3]
-    registry = sys.argv[4]
+    config = json.load(open(sys.argv[1]))
     headers = {'Content-Type': 'application/json'}
-    r = requests.put(marathon_url, data=json.dumps(app_spec(domain, slave_ip, registry)), headers=headers)
+    print app_spec(config)
+    r = requests.put(config["marathon_url"] + "/v2/groups", data=json.dumps(app_spec(config)), headers=headers)
     print r.json()

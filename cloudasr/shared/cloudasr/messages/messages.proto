@@ -6,8 +6,8 @@ message HeartbeatMessage {
 	required Status status = 3;
 
 	enum Status {
-		RUNNING = 0;
-		READY = 1;
+		STARTED = 0;
+		WAITING = 1;
 		WORKING = 2;
 		FINISHED = 3;
 	};
@@ -20,8 +20,9 @@ message WorkerStatusMessage {
 	required int32 time = 4;
 
 	enum Status {
-		WAITING = 0;
-		WORKING = 1;
+		STARTED = 0;
+		WAITING = 1;
+		WORKING = 2;
 	};
 }
 
@@ -71,4 +72,12 @@ message ResultsMessage {
 message UniqueID {
 	required uint64 lower = 1;
 	required uint64 upper = 2;
+}
+
+message SaverMessage {
+	required UniqueID id = 1;
+	required string model = 2;
+	required bytes body = 3;
+	required int32 frame_rate = 4;
+	repeated Alternative alternatives = 5;
 }

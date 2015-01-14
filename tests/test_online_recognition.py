@@ -22,7 +22,7 @@ class TestOnlineRecognition(unittest.TestCase):
         self.assertEquals(self.expected_responses, self.received_responses)
 
     def send_chunks(self):
-        self.socketIO.emit('begin', {'model': 'en-GB'})
+        self.socketIO.emit('begin', {'model': 'en-towninfo'})
 
         for chunk in self.chunks():
             self.socketIO.emit('chunk', {'chunk': chunk, 'frame_rate': 16000})
@@ -42,10 +42,10 @@ class TestOnlineRecognition(unittest.TestCase):
                 break
 
             self.expected_responses += 1
-            yield self.frames_to_pcm_array(frames)
+            yield self.frames_to_base64(frames)
 
-    def frames_to_pcm_array(self, frames):
-        return [struct.unpack('h', frames[i:i+2])[0] for i in range(0, len(frames), 2)]
+    def frames_to_base64(self, frames):
+        return base64.b64encode(frames)
 
     def assertMessageHasCorrectSchema(self, message):
         schema = {
@@ -53,6 +53,7 @@ class TestOnlineRecognition(unittest.TestCase):
             "properties": {
                 "status": {"type": "number"},
                 "final": {"type": "boolean"},
+                "request_id": {"type": "string"},
                 "result": {
                     "type": "object",
                     "properties": {
@@ -61,7 +62,8 @@ class TestOnlineRecognition(unittest.TestCase):
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "transcript": {"type": "string"}
+                                    "transcript": {"type": "string"},
+                                    "confidence": {"type": "number"}
                                 },
                                 "required": ["transcript"],
                                 "additionalProperties": False,
@@ -73,7 +75,7 @@ class TestOnlineRecognition(unittest.TestCase):
                 },
 
             },
-            "required": ["status", "result", "final"],
+            "required": ["status", "result", "final", "request_id"],
             "additionalProperties": False,
         }
 
@@ -111,8 +113,9 @@ class TestOnlineRecognition(unittest.TestCase):
                     "minItems": 1,
                 },
                 "result_index": {"type": "number"},
+                "request_id": {"type": "string"},
             },
-            "required": ["result", "result_index"],
+            "required": ["result", "result_index", "request_id"],
             "additionalProperties": False,
         }
 

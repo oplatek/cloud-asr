@@ -13,8 +13,8 @@
         var recorder = createRecorder();
         var socket = createSocket();
 
-        this.start = function() {
-            socket.emit('begin', {'model':'en-GB'});
+        this.start = function(model) {
+            socket.emit('begin', {'model':model});
             recorder.record();
             this.isRecording = true;
             this.onstart();
@@ -28,7 +28,7 @@
         };
 
         var handleResult = function(results) {
-            recognizer.onresult(results.result);
+            recognizer.onresult(results);
         };
 
         var handleError = function(error) {
@@ -51,12 +51,8 @@
                 handleError("Unable to connect to the server.");
             });
 
-            socket.on("result", function(results) {
-                console.log(results);
-            });
-
-            socket.on("final_result", function(results) {
-                handleResult(results);
+            socket.on("result", function(result) {
+                handleResult(result);
             });
 
             socket.on("error", function(error) {
@@ -85,10 +81,10 @@
         }
 
         function handleChunk(chunk) {
-            socket.emit("chunk", {chunk: floatTo16BitPCM(chunk[0]), frame_rate: 44100});
+            socket.emit("chunk", {chunk: encode16BitPcmToBase64(floatTo16BitPcm(chunk[0])), frame_rate: 44100});
         }
 
-        function floatTo16BitPCM(chunk){
+        function floatTo16BitPcm(chunk) {
             result = [];
             for( i = 0; i < chunk.length; i++ ) {
                 var s = Math.max(-1, Math.min(1, chunk[i]));
@@ -96,6 +92,22 @@
             }
 
             return result;
+        }
+
+        function encode16BitPcmToBase64(pcm) {
+            chars = []
+            for(i=0; i < pcm.length; i++) {
+                lower = pcm[i] & 255;
+                upper = pcm[i] >> 8;
+                if(upper < 0) {
+                    upper += 256;
+                }
+
+                chars[2*i] = String.fromCharCode(lower);
+                chars[2*i+1] = String.fromCharCode(upper);
+            }
+
+            return btoa(chars.join(""));
         }
 
     }

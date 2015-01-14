@@ -1,3 +1,4 @@
+import base64
 import struct
 import zmq.green as zmq
 import re
@@ -27,7 +28,9 @@ class FrontendWorker:
     def recognize_batch(self, data, headers):
         self.validate_headers(headers)
         self.connect_to_worker(data["model"])
-        response = self.recognize_batch_on_worker(data)
+
+        frame_rate = self.extract_frame_rate_from_headers(headers)
+        response = self.recognize_batch_on_worker(data, frame_rate)
 
         return response
 
@@ -61,6 +64,9 @@ class FrontendWorker:
         if not re.match("audio/x-wav; rate=\d+;", headers["Content-Type"]):
             raise MissingHeaderError()
 
+    def extract_frame_rate_from_headers(self, headers):
+        return int(re.search("audio/x-wav; rate=(\d+);", headers["Content-Type"]).group(1))
+
     def get_worker_address_from_master(self, model):
         request = createWorkerRequestMessage(model)
         self.master_socket.send(request.SerializeToString())
@@ -71,8 +77,8 @@ class FrontendWorker:
         else:
             raise NoWorkerAvailableError()
 
-    def recognize_batch_on_worker(self, data):
-        self.send_request_to_worker(data["wav"], "BATCH", has_next = False)
+    def recognize_batch_on_worker(self, data, frame_rate):
+        self.send_request_to_worker(data["wav"], "BATCH", frame_rate, has_next = False)
         response = self.read_response_from_worker()
         self.worker_socket.disconnect(self.worker_address)
 
@@ -97,6 +103,7 @@ class FrontendWorker:
                 },
             ],
             "result_index": 0,
+            "request_id": str(self.id)
         }
 
     def format_interim_response(self, response):
@@ -104,16 +111,20 @@ class FrontendWorker:
             'status': 0,
             'result': {
                 'hypotheses': [
-                    {'transcript': response.alternatives[0].transcript}
+                    {
+                        'transcript': response.alternatives[0].transcript,
+                        'confidence': response.alternatives[0].confidence
+                    }
                 ]
             },
-            'final': False
+            'final': False,
+            'request_id': str(self.id)
         }
 
 class Decoder:
 
     def decode(self, data):
-        return b''.join([struct.pack('h', pcm) for pcm in data])
+        return base64.b64decode(data)
 
 class NoWorkerAvailableError(Exception):
     pass

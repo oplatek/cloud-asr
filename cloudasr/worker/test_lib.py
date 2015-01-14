@@ -1,6 +1,6 @@
 import unittest
 import config
-from lib import Worker, Heartbeat
+from lib import Worker, Heartbeat, RemoteSaver
 from cloudasr.messages.helpers import *
 from cloudasr.test_doubles import PollerSpy, SocketSpy
 
@@ -19,14 +19,14 @@ class TestWorker(unittest.TestCase):
         self.audio = DummyAudio()
         self.worker = Worker(self.poller, self.heartbeat, self.asr, self.audio, self.saver, self.poller.has_next_message)
 
-    def test_worker_forwards_wav_from_every_message_to_asr_as_pcm(self):
+    def test_worker_forwards_resampled_wav_from_every_message_to_asr_as_pcm(self):
         messages = [
             {"frontend": self.make_frontend_request("message 1")},
             {"frontend": self.make_frontend_request("message 2")}
         ]
 
         self.run_worker(messages)
-        self.assertThatAsrProcessedChunks(["pcm message 1", "pcm message 2"])
+        self.assertThatAsrProcessedChunks(["resampled pcm message 1", "resampled pcm message 2"])
 
     def test_worker_reads_final_hypothesis_from_asr(self):
         messages = [
@@ -84,7 +84,7 @@ class TestWorker(unittest.TestCase):
     def test_worker_sends_heartbeat_to_master_when_ready_to_work(self):
         messages = []
         self.run_worker(messages)
-        self.assertThatHeartbeatsWereSent(["RUNNING"])
+        self.assertThatHeartbeatsWereSent(["STARTED"])
 
     def test_worker_sends_heartbeat_after_finishing_task(self):
         messages = [
@@ -92,7 +92,7 @@ class TestWorker(unittest.TestCase):
         ]
 
         self.run_worker(messages)
-        self.assertThatHeartbeatsWereSent(["RUNNING", "FINISHED"])
+        self.assertThatHeartbeatsWereSent(["STARTED", "FINISHED"])
 
     def test_worker_sends_working_heartbeats_during_online_recognition(self):
         messages = [
@@ -102,7 +102,7 @@ class TestWorker(unittest.TestCase):
         ]
 
         self.run_worker(messages)
-        self.assertThatHeartbeatsWereSent(["RUNNING", "WORKING", "WORKING", "FINISHED"])
+        self.assertThatHeartbeatsWereSent(["STARTED", "WORKING", "WORKING", "FINISHED"])
 
     def test_worker_sends_finished_heartbeat_after_end_of_online_recognition(self):
         messages = [
@@ -111,21 +111,30 @@ class TestWorker(unittest.TestCase):
         ]
 
         self.run_worker(messages)
-        self.assertThatHeartbeatsWereSent(["RUNNING", "WORKING", "FINISHED"])
+        self.assertThatHeartbeatsWereSent(["STARTED", "WORKING", "FINISHED"])
 
-    def test_worker_sends_finished_heartbeat_when_it_doesnt_receive_any_chunk_for_10secs(self):
+    def test_worker_sends_finished_heartbeat_when_it_doesnt_receive_any_chunk_for_1sec(self):
         messages = [
             {"frontend": self.make_frontend_request("message 1", "ONLINE", has_next = True)},
-            {"time": +10}
+            {"time": +1}
         ]
 
         self.run_worker(messages)
-        self.assertThatHeartbeatsWereSent(["RUNNING", "WORKING", "FINISHED"])
+        self.assertThatHeartbeatsWereSent(["STARTED", "WORKING", "FINISHED"])
+
+    def test_worker_sends_resets_asr_engine_when_it_doesnt_receive_any_chunk_for_1sec(self):
+        messages = [
+            {"frontend": self.make_frontend_request("message 1", "ONLINE", has_next = True)},
+            {"time": +1}
+        ]
+
+        self.run_worker(messages)
+        self.assertTrue(self.asr.resetted)
 
     def test_worker_sends_ready_heartbeat_when_it_doesnt_receive_any_task(self):
         messages = [{}]
         self.run_worker(messages)
-        self.assertThatHeartbeatsWereSent(["RUNNING", "READY"])
+        self.assertThatHeartbeatsWereSent(["STARTED", "WAITING"])
 
     def test_worker_saves_pcm_data_from_batch_request(self):
         messages = [
@@ -134,10 +143,10 @@ class TestWorker(unittest.TestCase):
 
         self.run_worker(messages)
         self.assertThatDataWasStored({
-            1: {"pcm": "pcm message", "hypothesis": [(1.0, "Hello World!")]}
+            1: {"frame_rate": 16000, "pcm": "pcm message", "hypothesis": [(1.0, "Hello World!")]}
         })
 
-    def test_worker_saves_pcm_data_from_online_request(self):
+    def test_worker_saves_pcm_data_from_online_request_in_original_frame_rate(self):
         messages = [
             {"frontend": self.make_frontend_request("message 1", "ONLINE", id = 1, has_next = True)},
             {"frontend": self.make_frontend_request("message 2", "ONLINE", id = 1, has_next = True)},
@@ -146,7 +155,7 @@ class TestWorker(unittest.TestCase):
 
         self.run_worker(messages)
         self.assertThatDataWasStored({
-            1: {"pcm": "resampled message 1resampled message 2resampled message 3", "hypothesis": [(1.0, "Hello World!")]}
+            1: {"frame_rate": 44100, "pcm": "message 1message 2message 3", "hypothesis": [(1.0, "Hello World!")]}
         })
 
     def run_worker(self, messages):
@@ -175,12 +184,51 @@ class TestWorker(unittest.TestCase):
     def make_heartbeat(self, status):
         return createHeartbeatMessage(self.worker_address, self.model, status)
 
+
+class RemoteSaverTest(unittest.TestCase):
+
+    def setUp(self):
+        self.id = 0
+        self.final_hypothesis = [(1.0, "Hello World!")]
+        self.model = "en-GB"
+        self.chunk = b"chunk"
+        self.frame_rate = 44100
+        self.socket = SocketSpy()
+        self.saver = RemoteSaver(self.socket, self.model)
+
+    def test_saver_sends_all_information(self):
+        self.saver.new_recognition(createUniqueID(self.id), self.frame_rate)
+        self.saver.add_pcm(self.chunk)
+        self.saver.add_pcm(self.chunk)
+        self.saver.final_hypothesis(self.final_hypothesis)
+
+        message = parseSaverMessage(self.socket.sent_message)
+        self.assertEquals(self.model, message.model)
+        self.assertEquals(self.chunk * 2, message.body)
+        self.assertEquals(self.frame_rate, message.frame_rate)
+        self.assertEquals(self.id, uniqId2Int(message.id))
+        self.assertEquals(self.final_hypothesis, alternatives2List(message.alternatives))
+
+    def test_saver_resets_after_final_hypothesis(self):
+        self.saver.new_recognition(createUniqueID(self.id))
+        self.saver.add_pcm(self.chunk)
+        self.saver.final_hypothesis(self.final_hypothesis)
+        self.saver.new_recognition(createUniqueID(self.id + 1))
+        self.saver.add_pcm(self.chunk)
+        self.saver.final_hypothesis(self.final_hypothesis)
+
+        message = parseSaverMessage(self.socket.sent_message)
+        self.assertEquals(self.id + 1, uniqId2Int(message.id))
+        self.assertEquals(self.chunk, message.body)
+
+
 class ASRSpy:
 
     def __init__(self, final_hypothesis, interim_hypothesis):
         self.processed_chunks = []
         self.final_hypothesis = final_hypothesis
         self.interim_hypothesis = interim_hypothesis
+        self.resetted = False
 
     def recognize_chunk(self, chunk):
         self.processed_chunks.append(chunk)
@@ -189,6 +237,9 @@ class ASRSpy:
 
     def get_final_hypothesis(self):
         return self.final_hypothesis
+
+    def reset(self):
+        self.resetted = True
 
 
 class DummyAudio:
@@ -204,9 +255,9 @@ class SaverSpy:
     def __init__(self):
         self.saved_data = {}
 
-    def new_recognition(self, id):
+    def new_recognition(self, id, frame_rate=16000):
         self.id = self.parse_id(id)
-        self.saved_data[self.id] = {"pcm": "", "hypothesis": ""}
+        self.saved_data[self.id] = {"frame_rate": frame_rate, "pcm": "", "hypothesis": ""}
 
     def add_pcm(self, pcm):
         self.saved_data[self.id]["pcm"] += pcm
@@ -215,4 +266,4 @@ class SaverSpy:
         self.saved_data[self.id]["hypothesis"] = final_hypothesis
 
     def parse_id(self, id):
-        return int(id.upper << 64 | id.lower)
+        return uniqId2Int(id)

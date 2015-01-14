@@ -1,9 +1,8 @@
 IP=`ifconfig docker0 | sed -n 's/addr://g;s/.*inet \([^ ]*\) .*/\1/p'`
 MESOS_SLAVE_IP=`docker inspect --format '{{ .NetworkSettings.IPAddress }}' mesos-slave`
 FRONTEND_HOST_PORT=8000
-FRONTEND_GUEST_PORT=80
 MONITOR_HOST_PORT=8001
-MONITOR_GUEST_PORT=80
+ANNOTATION_INTERFACE_HOST_PORT=8002
 MONITOR_STATUS_PORT=5681
 MONITOR_STATUS_ADDR=tcp://${IP}:${MONITOR_STATUS_PORT}
 WORKER_PORT=5678
@@ -12,6 +11,9 @@ MASTER_TO_WORKER_PORT=5679
 MASTER_TO_WORKER_ADDR=tcp://${IP}:${MASTER_TO_WORKER_PORT}
 MASTER_TO_FRONTEND_PORT=5680
 MASTER_TO_FRONTEND_ADDR=tcp://${IP}:${MASTER_TO_FRONTEND_PORT}
+RECORDINGS_SAVER_HOST_PORT=5682
+RECORDINGS_SAVER_GUEST_PORT=5682
+RECORDINGS_SAVER_ADDR=tcp://${IP}:${RECORDINGS_SAVER_HOST_PORT}
 
 SHARED_VOLUME=${CURDIR}/cloudasr/shared/cloudasr:/usr/local/lib/python2.7/dist-packages/cloudasr
 MASTER_VOLUMES=-v ${CURDIR}/cloudasr/master:/opt/app -v ${SHARED_VOLUME}
@@ -29,21 +31,31 @@ WORKER_OPTS=--name worker \
 	-e HOST=${IP} \
 	-e PORT0=${WORKER_PORT} \
 	-e MASTER_ADDR=${MASTER_TO_WORKER_ADDR} \
-	-e MODEL=en-GB \
+	-e RECORDINGS_SAVER_ADDR=${RECORDINGS_SAVER_ADDR} \
+	-e MODEL=en-towninfo \
+	-v ${CURDIR}/data:/tmp/data \
 	${WORKER_VOLUMES}
 
 FRONTEND_VOLUMES=-v ${CURDIR}/cloudasr/frontend:/opt/app -v ${SHARED_VOLUME}
 FRONTEND_OPTS=--name frontend \
-	-p ${FRONTEND_HOST_PORT}:${FRONTEND_GUEST_PORT} \
+	-p ${FRONTEND_HOST_PORT}:80 \
 	-e MASTER_ADDR=${MASTER_TO_FRONTEND_ADDR} \
 	${FRONTEND_VOLUMES}
 
 MONITOR_VOLUMES=-v ${CURDIR}/cloudasr/monitor:/opt/app -v ${SHARED_VOLUME}
 MONITOR_OPTS=--name monitor \
-	-p ${MONITOR_HOST_PORT}:${MONITOR_GUEST_PORT} \
+	-p ${MONITOR_HOST_PORT}:80 \
 	-p ${MONITOR_STATUS_PORT}:${MONITOR_STATUS_PORT} \
 	-e MONITOR_ADDR=tcp://0.0.0.0:${MONITOR_STATUS_PORT} \
 	${MONITOR_VOLUMES}
+
+ANNOTATION_INTERFACE_VOLUMES=-v ${CURDIR}/cloudasr/annotation_interface:/opt/app \
+	-v ${CURDIR}/cloudasr/annotation_interface/static/data:/opt/app/static/data \
+	-v ${SHARED_VOLUME}
+ANNOTATION_INTERFACE_OPTS=--name annotation_interface \
+	-p ${RECORDINGS_SAVER_HOST_PORT}:${RECORDINGS_SAVER_GUEST_PORT} \
+	-p ${ANNOTATION_INTERFACE_HOST_PORT}:80 \
+	${ANNOTATION_INTERFACE_VOLUMES}
 
 build:
 	docker build -t ufaldsg/cloud-asr-base cloudasr/shared
@@ -51,45 +63,41 @@ build:
 	docker build -t ufaldsg/cloud-asr-worker cloudasr/worker/
 	docker build -t ufaldsg/cloud-asr-master cloudasr/master/
 	docker build -t ufaldsg/cloud-asr-monitor cloudasr/monitor/
+	docker build -t ufaldsg/cloud-asr-annotation-interface cloudasr/annotation_interface/
 
 build_local:
 	cp -r cloudasr/shared/cloudasr cloudasr/frontend/cloudasr
 	cp -r cloudasr/shared/cloudasr cloudasr/worker/cloudasr
 	cp -r cloudasr/shared/cloudasr cloudasr/master/cloudasr
 	cp -r cloudasr/shared/cloudasr cloudasr/monitor/cloudasr
+	cp -r cloudasr/shared/cloudasr cloudasr/annotation_interface/cloudasr
 	docker build -t ufaldsg/cloud-asr-frontend cloudasr/frontend/
 	docker build -t ufaldsg/cloud-asr-worker cloudasr/worker/
 	docker build -t ufaldsg/cloud-asr-master cloudasr/master/
 	docker build -t ufaldsg/cloud-asr-monitor cloudasr/monitor/
+	docker build -t ufaldsg/cloud-asr-annotation-interface cloudasr/annotation_interface/
 	rm -rf cloudasr/frontend/cloudasr
 	rm -rf cloudasr/worker/cloudasr
 	rm -rf cloudasr/master/cloudasr
 	rm -rf cloudasr/monitor/cloudasr
+	rm -rf cloudasr/annotation_interface/cloudasr
 
 pull:
 	docker pull ufaldsg/cloud-asr-frontend
 	docker pull ufaldsg/cloud-asr-worker
 	docker pull ufaldsg/cloud-asr-master
 	docker pull ufaldsg/cloud-asr-monitor
+	docker pull ufaldsg/cloud-asr-annotation-interface
 
-run:
+run_locally:
 	docker run ${FRONTEND_OPTS} -d ufaldsg/cloud-asr-frontend
 	docker run ${WORKER_OPTS} -d ufaldsg/cloud-asr-worker
 	docker run ${MASTER_OPTS} -d ufaldsg/cloud-asr-master
 	docker run ${MONITOR_OPTS} -d ufaldsg/cloud-asr-monitor
+	docker run ${ANNOTATION_INTERFACE_OPTS} -d ufaldsg/cloud-asr-annotation-interface
 
-run_on_local_mesos: push_images_to_local_registry
-	python ${CURDIR}/deployment/run_on_mesos.py http://localhost:8080 cloudasr.dev ${MESOS_SLAVE_IP} registry:5000
-
-push_images_to_local_registry: build_local
-	docker tag ufaldsg/cloud-asr-monitor localhost:5000/ufaldsg/cloud-asr-monitor
-	docker tag ufaldsg/cloud-asr-master localhost:5000/ufaldsg/cloud-asr-master
-	docker tag ufaldsg/cloud-asr-frontend localhost:5000/ufaldsg/cloud-asr-frontend
-	docker tag ufaldsg/cloud-asr-worker localhost:5000/ufaldsg/cloud-asr-worker
-	docker push localhost:5000/ufaldsg/cloud-asr-monitor
-	docker push localhost:5000/ufaldsg/cloud-asr-master
-	docker push localhost:5000/ufaldsg/cloud-asr-frontend
-	docker push localhost:5000/ufaldsg/cloud-asr-worker
+run_mesos:
+	python ${CURDIR}/deployment/run_on_mesos.py ${CURDIR}/deployment/mesos.json
 
 run_worker:
 	docker run ${WORKER_OPTS} -i -t --rm ufaldsg/cloud-asr-worker
@@ -104,8 +112,8 @@ run_monitor:
 	docker run ${MONITOR_OPTS} -i -t --rm ufaldsg/cloud-asr-monitor
 
 stop:
-	docker kill frontend worker master monitor
-	docker rm frontend worker master monitor
+	docker kill frontend worker master monitor annotation_interface
+	docker rm frontend worker master monitor annotation_interface
 
 unit-test:
 	nosetests cloudasr/shared
@@ -113,11 +121,13 @@ unit-test:
 	PYTHONPATH=${CURDIR}/cloudasr/shared nosetests -e test_factory cloudasr/master
 	PYTHONPATH=${CURDIR}/cloudasr/shared nosetests -e test_factory cloudasr/worker
 	PYTHONPATH=${CURDIR}/cloudasr/shared nosetests -e test_factory cloudasr/monitor
+	PYTHONPATH=${CURDIR}/cloudasr/shared nosetests -e test_factory cloudasr/annotation_interface
 
 integration-test:
 	docker run ${FRONTEND_VOLUMES} --rm ufaldsg/cloud-asr-frontend nosetests /opt/app/test_factory.py
 	docker run ${MASTER_VOLUMES} --rm ufaldsg/cloud-asr-master nosetests /opt/app/test_factory.py
 	docker run ${MONITOR_VOLUMES} --rm ufaldsg/cloud-asr-monitor nosetests /opt/app/test_factory.py
+	docker run ${ANNOTATION_INTERFACE_VOLUMES} --rm ufaldsg/cloud-asr-annotation-interface nosetests /opt/app/test_factory.py
 	docker run ${WORKER_VOLUMES} --rm ufaldsg/cloud-asr-worker nosetests /opt/app/test_factory.py
 
 test:

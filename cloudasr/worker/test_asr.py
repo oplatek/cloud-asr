@@ -6,7 +6,8 @@ from lib import AudioUtils
 class TestASR(unittest.TestCase):
 
     def setUp(self):
-        self.asr = ASR(DummyRecogniser(), DummyLattice())
+        self.recogniser = DummyRecogniser()
+        self.asr = ASR(self.recogniser, dummy_to_nbest, dummy_to_best_path)
 
     def test_asr_returns_dummy_final_hypothesis(self):
         interim_hypothesis = self.asr.recognize_chunk(self.load_pcm_sample_data())
@@ -33,6 +34,10 @@ class TestASR(unittest.TestCase):
 
         self.assertTrue(self.callback_called)
 
+    def test_reset_resets_pipeline(self):
+        self.asr.reset()
+        self.assertTrue(self.recogniser.resetted)
+
     def load_pcm_sample_data(self):
         audio = AudioUtils()
 
@@ -45,6 +50,7 @@ class DummyRecogniser:
 
     def __init__(self):
         self.frames = 100
+        self.resetted = False
 
     def frame_in(self, frame):
         pass
@@ -53,16 +59,21 @@ class DummyRecogniser:
         self.frames = max(self.frames - max_frames, 0)
         return self.frames
 
-    def prune_final(self):
+    def finalize_decoding(self):
         pass
 
     def get_lattice(self):
         return (None, None)
 
-    def reset(self):
-        pass
+    def get_best_path(self):
+        return (None, None)
 
-class DummyLattice:
+    def reset(self, reset_pipeline):
+        self.resetted = True
 
-    def to_nbest(self, lattice, n):
-        return [(1.0, u"Hello World!")]
+
+def dummy_to_nbest(lattice, n):
+    return [(1.0, u"Hello World!")]
+
+def dummy_to_best_path(path):
+    return (0.0, u"Interim Result")
